@@ -4,6 +4,8 @@ name: Docling worker
 # O backend dispara sob demanda; .github/docling-dispatch é apenas fallback técnico.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
   push:
     branches:
       - main
