@@ -136,3 +136,83 @@ jobs:
       - name: Show Docling logs on failure
         if: failure() && steps.claim.outputs.has_job == 'true'
         run: docker logs eta-docling || true
+
+  materialize-visuals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOCLING_WORKER_URL: https://gxyufydpltpidzbeytxv.supabase.co/functions/v1/docling-worker
+
+    steps:
+      - name: Claim curated visual with GitHub OIDC
+        id: visual_claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_JSON="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=english-teacher-ai-docling")"
+          OIDC_TOKEN="$(printf '%s' "$OIDC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          echo "::add-mask::$OIDC_TOKEN"
+          curl --fail --silent --show-error \
+            -X POST "$DOCLING_WORKER_URL" \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"action":"claim_visual"}' \
+            -o /tmp/visual-claim.json
+          HAS_JOB="$(python3 - <<'PY'
+          import json
+          with open("/tmp/visual-claim.json", encoding="utf-8") as f:
+              payload=json.load(f)
+          print("true" if isinstance(payload.get("job"), dict) else "false")
+          PY
+          )"
+          echo "has_job=$HAS_JOB" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_JOB" != "true" ]; then
+            echo "No curated visual awaiting materialization."
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.visual_claim.outputs.has_job == 'true'
+
+      - name: Install pinned visual dependency
+        if: steps.visual_claim.outputs.has_job == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet PyMuPDF==1.26.4
+
+      - name: Materialize curated visual queue
+        if: steps.visual_claim.outputs.has_job == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLAIM_FILE="/tmp/visual-claim.json"
+          while true; do
+            python3 scripts/visual_materializer.py --claim-file "$CLAIM_FILE"
+
+            OIDC_JSON="$(curl --fail --silent --show-error \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=english-teacher-ai-docling")"
+            OIDC_TOKEN="$(printf '%s' "$OIDC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            echo "::add-mask::$OIDC_TOKEN"
+
+            curl --fail --silent --show-error \
+              -X POST "$DOCLING_WORKER_URL" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"action":"claim_visual"}' \
+              -o "$CLAIM_FILE"
+
+            HAS_JOB="$(python3 - <<'PY'
+          import json
+          with open("/tmp/visual-claim.json", encoding="utf-8") as f:
+              payload=json.load(f)
+          print("true" if isinstance(payload.get("job"), dict) else "false")
+          PY
+          )"
+            if [ "$HAS_JOB" != "true" ]; then
+              echo "Curated visual queue drained."
+              break
+            fi
+          done
