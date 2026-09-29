@@ -154,12 +154,25 @@ jobs:
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=english-teacher-ai-docling")"
           OIDC_TOKEN="$(printf '%s' "$OIDC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
           echo "::add-mask::$OIDC_TOKEN"
-          curl --fail --silent --show-error \
+          HTTP_STATUS="$(curl --silent --show-error \
+            -w '%{http_code}' \
             -X POST "$DOCLING_WORKER_URL" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
             --data '{"action":"claim_visual"}' \
-            -o /tmp/visual-claim.json
+            -o /tmp/visual-claim.json)"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            python3 - <<'PY'
+          import json
+          try:
+              with open("/tmp/visual-claim.json", encoding="utf-8") as f:
+                  payload=json.load(f)
+              print("Visual claim error:", payload.get("error", "UNKNOWN"))
+          except Exception:
+              print("Visual claim error: UNREADABLE_RESPONSE")
+          PY
+            exit 1
+          fi
           HAS_JOB="$(python3 - <<'PY'
           import json
           with open("/tmp/visual-claim.json", encoding="utf-8") as f:
