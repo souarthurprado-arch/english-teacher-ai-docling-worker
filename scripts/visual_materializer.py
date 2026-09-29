@@ -21,6 +21,7 @@ import fitz
 WORKER_URL = os.environ.get("DOCLING_WORKER_URL", "").strip()
 OIDC_AUDIENCE = "english-teacher-ai-docling"
 MAX_BYTES = 6_000_000
+MAX_DIMENSION = 4_000
 
 
 def request_json(url: str, *, method: str = "GET", payload=None, headers=None, timeout=120):
@@ -105,10 +106,18 @@ def render_png(page: fitz.Page, bbox: dict):
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
         data = pix.tobytes("png")
         last = (data, pix.width, pix.height)
-        if len(data) <= MAX_BYTES:
+        if (
+            pix.width <= MAX_DIMENSION
+            and pix.height <= MAX_DIMENSION
+            and len(data) <= MAX_BYTES
+        ):
             return last
     assert last is not None
-    if len(last[0]) > MAX_BYTES:
+    if (
+        last[1] > MAX_DIMENSION
+        or last[2] > MAX_DIMENSION
+        or len(last[0]) > MAX_BYTES
+    ):
         raise RuntimeError("Visual crop remains too large after downscaling.")
     return last
 
