@@ -21,7 +21,7 @@ concurrency:
 jobs:
   extract:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     env:
       DOCLING_WORKER_URL: https://gxyufydpltpidzbeytxv.supabase.co/functions/v1/docling-worker
       DOCLING_LOCAL_URL: http://127.0.0.1:5001
@@ -96,9 +96,40 @@ jobs:
           docker logs eta-docling || true
           exit 1
 
-      - name: Extract and curate claimed import
+      - name: Extract queued imports sequentially
         if: steps.claim.outputs.has_job == 'true'
-        run: python3 scripts/docling_actions_worker.py --claim-file /tmp/docling-claim.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLAIM_FILE="/tmp/docling-claim.json"
+          while true; do
+            python3 scripts/docling_actions_worker.py --claim-file "$CLAIM_FILE"
+
+            OIDC_JSON="$(curl --fail --silent --show-error \
+              -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=english-teacher-ai-docling")"
+            OIDC_TOKEN="$(printf '%s' "$OIDC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            echo "::add-mask::$OIDC_TOKEN"
+
+            curl --fail --silent --show-error \
+              -X POST "$DOCLING_WORKER_URL" \
+              -H "Authorization: Bearer $OIDC_TOKEN" \
+              -H "Content-Type: application/json" \
+              --data '{"action":"claim"}' \
+              -o "$CLAIM_FILE"
+
+            HAS_JOB="$(python3 - <<'PY'
+          import json
+          with open("/tmp/docling-claim.json", encoding="utf-8") as f:
+              payload=json.load(f)
+          print("true" if isinstance(payload.get("job"), dict) else "false")
+          PY
+          )"
+            if [ "$HAS_JOB" != "true" ]; then
+              echo "Docling queue drained."
+              break
+            fi
+          done
 
       - name: Show Docling logs on failure
         if: failure() && steps.claim.outputs.has_job == 'true'
