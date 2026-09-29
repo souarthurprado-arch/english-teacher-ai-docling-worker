@@ -1,0 +1,105 @@
+name: Docling worker
+
+# Worker público isolado. PDFs e dados permanecem no Supabase privado.
+# O backend dispara sob demanda; .github/docling-dispatch é apenas fallback técnico.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/docling-dispatch"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: docling-worker-production
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DOCLING_WORKER_URL: https://gxyufydpltpidzbeytxv.supabase.co/functions/v1/docling-worker
+      DOCLING_LOCAL_URL: http://127.0.0.1:5001
+      PYMUPDF4LLM_LICENSE_MODE: ${{ vars.PYMUPDF4LLM_LICENSE_MODE || 'AGPL' }}
+
+    steps:
+      - name: Claim queued import with GitHub OIDC
+        id: claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_JSON="$(curl --fail --silent --show-error             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=english-teacher-ai-docling")"
+          OIDC_TOKEN="$(printf '%s' "$OIDC_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          echo "::add-mask::$OIDC_TOKEN"
+          curl --fail --silent --show-error             -X POST "$DOCLING_WORKER_URL"             -H "Authorization: Bearer $OIDC_TOKEN"             -H "Content-Type: application/json"             --data '{"action":"claim"}'             -o /tmp/docling-claim.json
+          HAS_JOB="$(python3 - <<'PY'
+          import json
+          with open("/tmp/docling-claim.json", encoding="utf-8") as f:
+              payload=json.load(f)
+          print("true" if isinstance(payload.get("job"), dict) else "false")
+          PY
+          )"
+          echo "has_job=$HAS_JOB" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_JOB" != "true" ]; then
+            echo "No queued Docling import."
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.claim.outputs.has_job == 'true'
+
+      - name: Install pinned PDF and extraction dependencies
+        if: steps.claim.outputs.has_job == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check --quiet pypdf==6.19.0 Pillow==11.3.0
+          case "$PYMUPDF4LLM_LICENSE_MODE" in
+            AGPL|COMMERCIAL)
+              echo "PyMuPDF4LLM hybrid evidence enabled ($PYMUPDF4LLM_LICENSE_MODE)."
+              python3 -m pip install --disable-pip-version-check --quiet pymupdf4llm==1.28.2
+              ;;
+            DISABLED|"")
+              echo "PyMuPDF4LLM disabled; Docling remains fully functional."
+              python3 -m pip install --disable-pip-version-check --quiet PyMuPDF==1.26.4
+              ;;
+            *)
+              echo "Invalid PYMUPDF4LLM_LICENSE_MODE=$PYMUPDF4LLM_LICENSE_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Start local Docling Serve CPU
+        if: steps.claim.outputs.has_job == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull quay.io/docling-project/docling-serve-cpu:v1.29.0
+          docker run -d --rm             --name eta-docling             -p 5001:5001             -e DOCLING_SERVE_ENABLE_UI=false             -e DOCLING_SERVE_ENABLE_API_DOCS=false             -e DOCLING_SERVE_ENG_LOC_NUM_WORKERS=1             -e DOCLING_SERVE_LOAD_MODELS_AT_BOOT=true             -e DOCLING_DEVICE=cpu             -e DOCLING_NUM_THREADS=2             quay.io/docling-project/docling-serve-cpu:v1.29.0
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:5001/health >/dev/null; then
+              echo "Docling is healthy."
+              exit 0
+            fi
+            if ! docker inspect eta-docling >/dev/null 2>&1; then
+              echo "Docling container exited unexpectedly."
+              docker logs eta-docling || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Docling health check timed out."
+          docker logs eta-docling || true
+          exit 1
+
+      - name: Extract and curate claimed import
+        if: steps.claim.outputs.has_job == 'true'
+        run: python3 scripts/docling_actions_worker.py --claim-file /tmp/docling-claim.json
+
+      - name: Show Docling logs on failure
+        if: failure() && steps.claim.outputs.has_job == 'true'
+        run: docker logs eta-docling || true
