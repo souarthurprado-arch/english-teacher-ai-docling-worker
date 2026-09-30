@@ -537,6 +537,75 @@ def ranges_for(page_count: int | None, batch_pages: int) -> list[tuple[int, int]
     ]
 
 
+
+def write_style_audit(document: pymupdf.Document, *, file_id: str) -> None:
+    """Persist a compact source-style inventory for editorial fidelity auditing."""
+    pages: dict[str, list[dict[str, Any]]] = {}
+    totals = {"bold": 0, "italic": 0, "bold_italic": 0}
+    for page_index in range(len(document)):
+        page = document.load_page(page_index)
+        payload = page.get_text("dict")
+        styled: list[dict[str, Any]] = []
+        for block in payload.get("blocks", []):
+            if not isinstance(block, dict) or block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                if not isinstance(line, dict):
+                    continue
+                for span in line.get("spans", []):
+                    if not isinstance(span, dict):
+                        continue
+                    text_value = " ".join(str(span.get("text") or "").split()).strip()
+                    if not text_value:
+                        continue
+                    flags = int(span.get("flags") or 0)
+                    font = str(span.get("font") or "")
+                    font_lc = font.lower()
+                    bold = bool(flags & 16) or "bold" in font_lc or "black" in font_lc
+                    italic = bool(flags & 2) or "italic" in font_lc or "oblique" in font_lc
+                    if not (bold or italic):
+                        continue
+                    bbox = span.get("bbox")
+                    item = {
+                        "text": text_value[:500],
+                        "font": font[:120],
+                        "size": round(float(span.get("size") or 0.0), 2),
+                        "flags": flags,
+                        "bold": bold,
+                        "italic": italic,
+                    }
+                    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                        item["bbox"] = [round(float(value), 2) for value in bbox]
+                    styled.append(item)
+                    if bold and italic:
+                        totals["bold_italic"] += 1
+                    elif bold:
+                        totals["bold"] += 1
+                    elif italic:
+                        totals["italic"] += 1
+        if styled:
+            pages[str(page_index + 1)] = styled
+    result = {
+        "file_id": file_id,
+        "engine": "PyMuPDF",
+        "method": "SOURCE_STYLE_SPANS_V1",
+        "page_count": len(document),
+        "limitations": [
+            "Bold and italic are derived from PDF font flags/font names.",
+            "Underline is not reliably encoded as a font span and is not certified by this audit."
+        ],
+        "totals": totals,
+        "pages": pages,
+    }
+    with open("/tmp/source-style-audit.json", "w", encoding="utf-8") as handle:
+        json.dump(result, handle, ensure_ascii=False, separators=(",", ":"))
+    print(
+        "Stored source style audit: "
+        f"{len(pages)} page(s), {totals['bold']} bold, "
+        f"{totals['italic']} italic, {totals['bold_italic']} bold+italic span(s)."
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--claim-file", required=True)
@@ -598,6 +667,9 @@ def main() -> int:
         for value in (job.get("reconstruction_completed_pages") or [])
         if str(value).isdigit() and int(value) > 0
     }
+
+    if reconstruction_only and pdf_document is not None:
+        write_style_audit(pdf_document, file_id=file_id)
 
     if not file_id or not source_url:
         raise RuntimeError("Claimed job is missing file_id/source_url.")
