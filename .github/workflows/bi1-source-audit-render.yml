@@ -1,0 +1,59 @@
+name: BI1 source audit render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bi1-source-audit-render.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install PyMuPDF and Pillow
+        run: python3 -m pip install --quiet PyMuPDF==1.26.4 Pillow==11.3.0
+
+      - name: Download source and render audit sheets
+        shell: bash
+        run: |
+          set -euo pipefail
+          REVIEW_ENDPOINT='https://gxyufydpltpidzbeytxv.supabase.co/functions/v1/temp-source-review'
+          REVIEW_TOKEN='review-20260929-8f3d1a7c-2b6e-4b51-9ca0-41d8a2e73f60'
+          FILE_ID='b95d8756-14ad-4dbd-a883-f25554799b3d'
+          curl --fail --silent --show-error --get "$REVIEW_ENDPOINT"             --data-urlencode "token=$REVIEW_TOKEN"             --data-urlencode "file_id=$FILE_ID" > /tmp/source.json
+          URL="$(python3 -c 'import json; print(json.load(open("/tmp/source.json"))["url"])')"
+          curl --fail --silent --show-error "$URL" -o /tmp/bi1.pdf
+
+          python3 - <<'PY'
+          import fitz, io, base64
+          from PIL import Image, ImageDraw
+          pages=[25,35,55,70,75,77,80,98,109,110,111,112,113,114,115,118,119,120]
+          doc=fitz.open('/tmp/bi1.pdf')
+          groups=[pages[i:i+4] for i in range(0,len(pages),4)]
+          for gi,grp in enumerate(groups,1):
+              ims=[]
+              for pno in grp:
+                  page=doc[pno-1]
+                  pix=page.get_pixmap(matrix=fitz.Matrix(1.35,1.35),alpha=False)
+                  im=Image.open(io.BytesIO(pix.tobytes('jpeg', jpg_quality=72))).convert('RGB')
+                  im.thumbnail((760,1075))
+                  canvas=Image.new('RGB',(780,1125),'white')
+                  canvas.paste(im,((780-im.width)//2,35))
+                  d=ImageDraw.Draw(canvas)
+                  d.text((12,10),f'PDF page {pno}',fill='black')
+                  ims.append(canvas)
+              rows=(len(ims)+1)//2
+              sheet=Image.new('RGB',(1560,rows*1125),'white')
+              for i,im in enumerate(ims):
+                  sheet.paste(im,((i%2)*780,(i//2)*1125))
+              b=io.BytesIO(); sheet.save(b,format='JPEG',quality=68,optimize=True)
+              enc=base64.b64encode(b.getvalue()).decode()
+              print(f'BI1_AUDIT_SHEET_{gi}_BEGIN')
+              print(enc)
+              print(f'BI1_AUDIT_SHEET_{gi}_END')
+          PY
