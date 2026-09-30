@@ -133,6 +133,15 @@ jobs:
             fi
           done
 
+      - name: Upload source style audit
+        if: always() && steps.claim.outputs.has_job == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-style-audit
+          path: /tmp/source-style-audit.json
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Show Docling logs on failure
         if: failure() && steps.claim.outputs.has_job == 'true'
         run: docker logs eta-docling || true
