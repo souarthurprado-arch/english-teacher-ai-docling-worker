@@ -538,6 +538,18 @@ def ranges_for(page_count: int | None, batch_pages: int) -> list[tuple[int, int]
 
 
 
+
+def write_page_audit_previews(document: pymupdf.Document) -> None:
+    """Render compact full-page previews for manual source-fidelity review."""
+    directory = "/tmp/source-page-audit"
+    os.makedirs(directory, exist_ok=True)
+    for page_number in range(1, len(document) + 1):
+        payload, width, height = render_pdf_page_preview(document, page_number)
+        with open(os.path.join(directory, f"page-{page_number:03d}.webp"), "wb") as handle:
+            handle.write(payload)
+    print(f"Stored {len(document)} page preview(s) for source-fidelity audit.")
+
+
 def write_style_audit(document: pymupdf.Document, *, file_id: str) -> None:
     """Persist a compact source-style inventory for editorial fidelity auditing."""
     pages: dict[str, list[dict[str, Any]]] = {}
@@ -670,6 +682,7 @@ def main() -> int:
 
     if reconstruction_only and pdf_document is not None:
         write_style_audit(pdf_document, file_id=file_id)
+        write_page_audit_previews(pdf_document)
 
     if not file_id or not source_url:
         raise RuntimeError("Claimed job is missing file_id/source_url.")
