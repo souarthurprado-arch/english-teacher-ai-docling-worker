@@ -1,0 +1,52 @@
+name: BI1 answer-key validation pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bi1-answer-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install PyMuPDF
+        run: python3 -m pip install --quiet PyMuPDF==1.26.4
+
+      - name: Download exact source and render validation pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXISTING=".github/workflows/bi1-source-audit-render.yml"
+          REVIEW_ENDPOINT="$(python3 -c 'import re; s=open("'"$EXISTING"'").read(); print(re.search(r"REVIEW_ENDPOINT=.([^\n]+).",s).group(1))')"
+          REVIEW_TOKEN="$(python3 -c 'import re; s=open("'"$EXISTING"'").read(); print(re.search(r"REVIEW_TOKEN=.([^\n]+).",s).group(1))')"
+          FILE_ID="$(python3 -c 'import re; s=open("'"$EXISTING"'").read(); print(re.search(r"FILE_ID=.([^\n]+).",s).group(1))')"
+          mkdir -p /tmp/bi1-validation-pages
+          curl --fail --silent --show-error --get "$REVIEW_ENDPOINT"             --data-urlencode "token=$REVIEW_TOKEN"             --data-urlencode "file_id=$FILE_ID" > /tmp/source.json
+          URL="$(python3 -c 'import json; print(json.load(open("/tmp/source.json"))["url"])')"
+          curl --fail --silent --show-error "$URL" -o /tmp/bi1.pdf
+
+          python3 - <<'PY'
+          import fitz
+          pages=[3,4,7,8,9,10,11,12,14,15,16,17,18,19,20,21,22,24,25,26,27,28,30,31,32,35,36,37,38,39,41,42,44,45,46,48,49,50,51,52,54,56,57,58,59,60,61,62,65,66,67,68,69,70,71,72,74,76,78,79,81,82,84,85,87,88,93,119]
+          doc=fitz.open('/tmp/bi1.pdf')
+          print('source_pages',doc.page_count)
+          for p in pages:
+              pix=doc[p-1].get_pixmap(matrix=fitz.Matrix(2.0,2.0),alpha=False)
+              pix.save(f'/tmp/bi1-validation-pages/page-{p:03d}.jpg', jpg_quality=90)
+          PY
+
+      - name: Upload validation pages
+        uses: actions/upload-artifact@v4
+        with:
+          name: bi1-answer-validation-pages
+          path: /tmp/bi1-validation-pages/*.jpg
+          if-no-files-found: error
+          retention-days: 1
