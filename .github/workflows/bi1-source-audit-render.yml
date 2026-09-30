@@ -25,12 +25,13 @@ jobs:
           REVIEW_ENDPOINT='https://gxyufydpltpidzbeytxv.supabase.co/functions/v1/temp-source-review'
           REVIEW_TOKEN='review-20260929-8f3d1a7c-2b6e-4b51-9ca0-41d8a2e73f60'
           FILE_ID='b95d8756-14ad-4dbd-a883-f25554799b3d'
+          mkdir -p /tmp/bi1-audit
           curl --fail --silent --show-error --get "$REVIEW_ENDPOINT"             --data-urlencode "token=$REVIEW_TOKEN"             --data-urlencode "file_id=$FILE_ID" > /tmp/source.json
           URL="$(python3 -c 'import json; print(json.load(open("/tmp/source.json"))["url"])')"
           curl --fail --silent --show-error "$URL" -o /tmp/bi1.pdf
 
           python3 - <<'PY'
-          import fitz, io, base64
+          import fitz, io
           from PIL import Image, ImageDraw
           pages=[25,35,55,70,75,77,80,98,109,110,111,112,113,114,115,118,119,120]
           doc=fitz.open('/tmp/bi1.pdf')
@@ -39,21 +40,25 @@ jobs:
               ims=[]
               for pno in grp:
                   page=doc[pno-1]
-                  pix=page.get_pixmap(matrix=fitz.Matrix(1.35,1.35),alpha=False)
-                  im=Image.open(io.BytesIO(pix.tobytes('jpeg', jpg_quality=72))).convert('RGB')
-                  im.thumbnail((760,1075))
-                  canvas=Image.new('RGB',(780,1125),'white')
-                  canvas.paste(im,((780-im.width)//2,35))
+                  pix=page.get_pixmap(matrix=fitz.Matrix(1.8,1.8),alpha=False)
+                  im=Image.open(io.BytesIO(pix.tobytes('jpeg', jpg_quality=80))).convert('RGB')
+                  im.thumbnail((980,1385))
+                  canvas=Image.new('RGB',(1000,1440),'white')
+                  canvas.paste(im,((1000-im.width)//2,42))
                   d=ImageDraw.Draw(canvas)
-                  d.text((12,10),f'PDF page {pno}',fill='black')
+                  d.text((12,12),f'PDF page {pno}',fill='black')
                   ims.append(canvas)
               rows=(len(ims)+1)//2
-              sheet=Image.new('RGB',(1560,rows*1125),'white')
+              sheet=Image.new('RGB',(2000,rows*1440),'white')
               for i,im in enumerate(ims):
-                  sheet.paste(im,((i%2)*780,(i//2)*1125))
-              b=io.BytesIO(); sheet.save(b,format='JPEG',quality=68,optimize=True)
-              enc=base64.b64encode(b.getvalue()).decode()
-              print(f'BI1_AUDIT_SHEET_{gi}_BEGIN')
-              print(enc)
-              print(f'BI1_AUDIT_SHEET_{gi}_END')
+                  sheet.paste(im,((i%2)*1000,(i//2)*1440))
+              sheet.save(f'/tmp/bi1-audit/sheet-{gi}.jpg',format='JPEG',quality=78,optimize=True)
           PY
+
+      - name: Upload audit sheets
+        uses: actions/upload-artifact@v4
+        with:
+          name: bi1-audit-sheets
+          path: /tmp/bi1-audit/*.jpg
+          if-no-files-found: error
+          retention-days: 1
