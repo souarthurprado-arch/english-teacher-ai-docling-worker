@@ -142,6 +142,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
+      - name: Upload source page audit
+        if: always() && steps.claim.outputs.has_job == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-page-audit
+          path: /tmp/source-page-audit
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: Show Docling logs on failure
         if: failure() && steps.claim.outputs.has_job == 'true'
         run: docker logs eta-docling || true
