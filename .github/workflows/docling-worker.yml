@@ -47,6 +47,10 @@ jobs:
       - uses: actions/checkout@v7
         if: steps.claim.outputs.has_job == 'true'
 
+      - name: Verify worker contract
+        if: steps.claim.outputs.has_job == 'true'
+        run: python3 scripts/verify_worker_contract.py
+
       - name: Install pinned PDF and extraction dependencies
         if: steps.claim.outputs.has_job == 'true'
         shell: bash
