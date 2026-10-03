@@ -1,16 +1,9 @@
 name: Docling worker
 
 # Worker público isolado. PDFs e dados permanecem no Supabase privado.
-# O backend dispara sob demanda; .github/docling-dispatch é apenas fallback técnico.
+# O backend dispara sob demanda. Não há polling, cron ou trigger por push.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/15 * * * *"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/docling-dispatch"
 
 permissions:
   contents: read
