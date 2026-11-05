@@ -34,6 +34,9 @@ for needle, label in [
     ("preserve_text_geometry", "text geometry reconstruction"),
     ("submit_reconstruction", "reconstruction submission"),
     ("finish_reconstruction", "reconstruction completion"),
+    ('EVIDENCE_VERSION = "EXTRACTION_EVIDENCE_V2"', "versioned evidence"),
+    ("with_evidence_fingerprint", "evidence fingerprint"),
+    ("CLAIM_TOKEN", "lease claim token"),
 ]:
     require(needle in worker, f"worker must preserve {label}")
 
