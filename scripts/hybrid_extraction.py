@@ -276,6 +276,23 @@ def _weighted_jaccard(left: str, right: str) -> float | None:
     return round(intersection / union, 4)
 
 
+def _page_text_map(text: str) -> dict[int, str]:
+    pages: dict[int, list[str]] = {}
+    current: int | None = None
+    for line in str(text or "").splitlines():
+        marker = re.match(r"^\[\[PAGE\s+(\d+)\]\]$", line.strip(), flags=re.I)
+        if marker:
+            current = int(marker.group(1))
+            pages.setdefault(current, [])
+        elif current is not None and line.strip():
+            pages[current].append(line.strip())
+    return {page: "\n".join(lines) for page, lines in pages.items()}
+
+
+def _numeric_tokens(text: str) -> Counter[str]:
+    return Counter(re.findall(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?%?", text or ""))
+
+
 def consensus(docling: dict[str, Any], pymupdf4llm: dict[str, Any]) -> dict[str, Any]:
     if pymupdf4llm.get("status") != "SUCCESS":
         return {
@@ -289,6 +306,29 @@ def consensus(docling: dict[str, Any], pymupdf4llm: dict[str, Any]) -> dict[str,
         str(docling.get("text_content") or ""),
         str(pymupdf4llm.get("text_content") or ""),
     )
+    doc_pages = _page_text_map(str(docling.get("text_content") or ""))
+    pymu_pages = _page_text_map(str(pymupdf4llm.get("text_content") or ""))
+    page_consensus: list[dict[str, Any]] = []
+    material_reasons: list[str] = []
+    for page in sorted(set(doc_pages) | set(pymu_pages)):
+        left, right = doc_pages.get(page, ""), pymu_pages.get(page, "")
+        page_similarity = _weighted_jaccard(left, right)
+        numeric_mismatch = _numeric_tokens(left) != _numeric_tokens(right)
+        if numeric_mismatch:
+            material_reasons.append(f"p{page}:numeric_token_mismatch")
+        page_status = (
+            "DISAGREED"
+            if numeric_mismatch or (page_similarity is not None and page_similarity < 0.48)
+            else "AGREED"
+            if page_similarity is not None and page_similarity >= 0.82
+            else "COMPLEMENTARY"
+        )
+        page_consensus.append({
+            "page_number": page,
+            "status": page_status,
+            "text_similarity": page_similarity,
+            "numeric_token_mismatch": numeric_mismatch,
+        })
     doc_elements = [
         item for item in (docling.get("elements") or []) if isinstance(item, dict)
     ]
@@ -306,7 +346,10 @@ def consensus(docling: dict[str, Any], pymupdf4llm: dict[str, Any]) -> dict[str,
         return result
 
     doc_counts, pymu_counts = counts(doc_elements), counts(pymu_elements)
-    if similarity is None:
+    if material_reasons:
+        status = "DISAGREED"
+        material = True
+    elif similarity is None:
         status = "COMPLEMENTARY"
         material = False
     elif similarity >= 0.82:
@@ -328,6 +371,8 @@ def consensus(docling: dict[str, Any], pymupdf4llm: dict[str, Any]) -> dict[str,
             "docling": doc_counts,
             "pymupdf4llm": pymu_counts,
         },
+        "page_consensus": page_consensus,
+        "material_reasons": material_reasons,
     }
 
 
