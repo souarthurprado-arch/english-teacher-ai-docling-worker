@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import math
@@ -39,6 +40,24 @@ OIDC_AUDIENCE = "english-teacher-ai-docling"
 PREVIEW_MAX_EDGE = 1440
 PREVIEW_WEBP_QUALITY = 76
 PREVIEW_MAX_BYTES = 1_200_000
+EVIDENCE_VERSION = "EXTRACTION_EVIDENCE_V2"
+CLAIM_TOKEN = ""
+
+
+def with_evidence_fingerprint(extraction: dict[str, Any]) -> dict[str, Any]:
+    """Attach a reproducible hash to the exact evidence submitted to Supabase."""
+    payload = dict(extraction)
+    payload.pop("evidence_sha256", None)
+    payload.pop("evidence_version", None)
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    payload["evidence_version"] = EVIDENCE_VERSION
+    payload["evidence_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return payload
 
 
 def http_json(
@@ -79,11 +98,14 @@ def github_oidc_token() -> str:
 
 def worker_call(action: str, payload: dict[str, Any], timeout: int = 70) -> Any:
     token = github_oidc_token()
+    request_payload = dict(payload)
+    if CLAIM_TOKEN and action != "claim":
+        request_payload.setdefault("claim_token", CLAIM_TOKEN)
     return http_json(
         WORKER_URL,
         method="POST",
         headers={"Authorization": f"Bearer {token}"},
-        body={"action": action, **payload},
+        body={"action": action, **request_payload},
         timeout=timeout,
     )
 
@@ -632,6 +654,10 @@ def main() -> int:
 
     file_id = str(job.get("file_id") or "")
     source_url = str(job.get("source_url") or "")
+    global CLAIM_TOKEN
+    CLAIM_TOKEN = str(job.get("claim_token") or "").strip()
+    if not CLAIM_TOKEN:
+        raise RuntimeError("Claimed job is missing claim_token.")
     page_count = int(job["page_count"]) if job.get("page_count") else None
     batch_pages = max(1, int(job.get("batch_pages") or 8))
     mime_type = str(job.get("mime_type") or "").lower()
@@ -732,6 +758,7 @@ def main() -> int:
                         f"Hybrid reconstruction consensus page {page_number}: "
                         f"{consensus_state}."
                     )
+                extraction = with_evidence_fingerprint(extraction)
                 response = worker_call(
                     "submit_reconstruction",
                     {
@@ -824,6 +851,7 @@ def main() -> int:
                     f"Hybrid extraction consensus pages {label}: "
                     f"{consensus_state}."
                 )
+            extraction = with_evidence_fingerprint(extraction)
 
             visual_pages = sorted(
                 {
