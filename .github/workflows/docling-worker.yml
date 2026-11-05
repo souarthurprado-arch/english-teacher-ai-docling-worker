@@ -51,6 +51,10 @@ jobs:
         if: steps.claim.outputs.has_job == 'true'
         run: python3 scripts/verify_worker_contract.py
 
+      - name: Test hybrid consensus
+        if: steps.claim.outputs.has_job == 'true'
+        run: python3 scripts/test_hybrid_consensus.py
+
       - name: Install pinned PDF and extraction dependencies
         if: steps.claim.outputs.has_job == 'true'
         shell: bash
